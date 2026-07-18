@@ -161,6 +161,7 @@ void Hal::enterWifiConfigMode()
         WifiManagerConfig config;
         config.ssid_prefix = "StackChan";
         config.language = "en-US";
+        config.show_ota_config = true;
         wifi.Initialize(config);
     }
     wifi.StartConfigAp();
