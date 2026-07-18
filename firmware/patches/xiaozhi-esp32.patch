@@ -1,7 +1,7 @@
-diff --git c/main/application.cc w/main/application.cc
-index d69d43d..652f4db 100644
---- c/main/application.cc
-+++ w/main/application.cc
+diff --git a/main/application.cc b/main/application.cc
+index d54ac6b..8abadb2 100644
+--- a/main/application.cc
++++ b/main/application.cc
 @@ -9,6 +9,9 @@
  #include "mcp_server.h"
  #include "assets.h"
@@ -113,6 +113,17 @@ index d69d43d..652f4db 100644
 -        digit_sound{'8', Lang::Sounds::OGG_8},
 -        digit_sound{'9', Lang::Sounds::OGG_9}
 -    }};
+-
+-    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
+-    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
+-
+-    for (const auto& digit : code) {
+-        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
+-            [digit](const digit_sound& ds) { return ds.digit == digit; });
+-        if (it != digit_sounds.end()) {
+-            audio_service_.PlaySound(it->sound);
+-        }
+-    }
 +    // struct digit_sound {
 +    //     char digit;
 +    //     const std::string_view& sound;
@@ -129,19 +140,10 @@ index d69d43d..652f4db 100644
 +    //     digit_sound{'8', Lang::Sounds::OGG_8},
 +    //     digit_sound{'9', Lang::Sounds::OGG_9}
 +    // }};
- 
--    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
--    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
++
 +    // // This sentence uses 9KB of SRAM, so we need to wait for it to finish
 +    // Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
- 
--    for (const auto& digit : code) {
--        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
--            [digit](const digit_sound& ds) { return ds.digit == digit; });
--        if (it != digit_sounds.end()) {
--            audio_service_.PlaySound(it->sound);
--        }
--    }
++
 +    // for (const auto& digit : code) {
 +    //     auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
 +    //         [digit](const digit_sound& ds) { return ds.digit == digit; });
@@ -155,7 +157,7 @@ index d69d43d..652f4db 100644
  }
  
  void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
-@@ -711,13 +749,23 @@ void Application::HandleToggleChatEvent() {
+@@ -711,7 +749,6 @@ void Application::HandleToggleChatEvent() {
  }
  
  void Application::ContinueOpenAudioChannel(ListeningMode mode) {
@@ -163,6 +165,8 @@ index d69d43d..652f4db 100644
      if (GetDeviceState() != kDeviceStateConnecting) {
          return;
      }
+@@ -721,7 +758,18 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
  
      if (!protocol_->IsAudioChannelOpened()) {
 -        if (!protocol_->OpenAudioChannel()) {
@@ -181,7 +185,7 @@ index d69d43d..652f4db 100644
              return;
          }
      }
-@@ -782,6 +830,22 @@ void Application::HandleWakeWordDetectedEvent() {
+@@ -786,6 +834,22 @@ void Application::HandleWakeWordDetectedEvent() {
      auto wake_word = audio_service_.GetLastWakeWord();
      ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
  
@@ -204,7 +208,7 @@ index d69d43d..652f4db 100644
      if (state == kDeviceStateIdle) {
          audio_service_.EncodeWakeWord();
          auto wake_word = audio_service_.GetLastWakeWord();
-@@ -861,21 +925,43 @@ void Application::HandleStateChangedEvent() {
+@@ -866,21 +930,43 @@ void Application::HandleStateChangedEvent() {
      auto led = board.GetLed();
      led->OnStateChanged();
      
@@ -249,16 +253,18 @@ index d69d43d..652f4db 100644
              display->SetStatus(Lang::Strings::LISTENING);
              display->SetEmotion("neutral");
  
-@@ -886,7 +972,7 @@ void Application::HandleStateChangedEvent() {
+@@ -891,8 +977,8 @@ void Application::HandleStateChangedEvent() {
                  if (listening_mode_ == kListeningModeAutoStop) {
                      audio_service_.WaitForPlaybackQueueEmpty();
                  }
 -                
+-                // Send the start listening command
 +
-                 // Send the start listening command
++                 // Send the start listening command
                  protocol_->SendStartListening(listening_mode_);
                  audio_service_.EnableVoiceProcessing(true);
-@@ -907,6 +993,12 @@ void Application::HandleStateChangedEvent() {
+             }
+@@ -912,6 +998,12 @@ void Application::HandleStateChangedEvent() {
              }
              break;
          case kDeviceStateSpeaking:
@@ -271,7 +277,7 @@ index d69d43d..652f4db 100644
              display->SetStatus(Lang::Strings::SPEAKING);
  
              if (listening_mode_ != kListeningModeRealtime) {
-@@ -1075,6 +1167,63 @@ void Application::SendMcpMessage(const std::string& payload) {
+@@ -1087,6 +1179,63 @@ void Application::SendMcpMessage(const std::string& payload) {
      });
  }
  
@@ -335,14 +341,14 @@ index d69d43d..652f4db 100644
  void Application::SetAecMode(AecMode mode) {
      aec_mode_ = mode;
      Schedule([this]() {
-diff --git c/main/application.h w/main/application.h
-index 7ca7af4..de144a3 100644
---- c/main/application.h
-+++ w/main/application.h
-@@ -108,8 +108,21 @@ public:
-     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
+diff --git a/main/application.h b/main/application.h
+index cb635d4..01fd6c9 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -110,8 +110,21 @@ public:
      bool CanEnterSleepMode();
      void SendMcpMessage(const std::string& payload);
+     void RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback);
 +    // Dotty: ambient perception event emit (face_detected / face_lost / sound_event).
 +    // Thread-safe (Schedule wrapped); fire-and-forget.
 +    void SendEvent(const std::string& name, const std::string& data_json);
@@ -361,7 +367,7 @@ index 7ca7af4..de144a3 100644
      void PlaySound(const std::string_view& sound);
      AudioService& GetAudioService() { return audio_service_; }
      
-@@ -140,6 +153,7 @@ private:
+@@ -144,6 +157,7 @@ private:
      bool aborted_ = false;
      bool assets_version_checked_ = false;
      bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
@@ -369,10 +375,10 @@ index 7ca7af4..de144a3 100644
      int clock_ticks_ = 0;
      TaskHandle_t activation_task_handle_ = nullptr;
  
-diff --git c/main/assets.cc w/main/assets.cc
-index ad61944..6b84daf 100644
---- c/main/assets.cc
-+++ w/main/assets.cc
+diff --git a/main/assets.cc b/main/assets.cc
+index 93e9521..e6bfa6b 100644
+--- a/main/assets.cc
++++ b/main/assets.cc
 @@ -3,8 +3,8 @@
  #include "display.h"
  #include "application.h"
@@ -384,22 +390,17 @@ index ad61944..6b84daf 100644
  #if HAVE_LVGL
  #include "display/lcd_display.h"
  #include <spi_flash_mmap.h>
-@@ -356,72 +356,72 @@ bool Assets::LvglStrategy::Apply(Assets* assets) {
+@@ -358,72 +358,72 @@ bool Assets::LvglStrategy::Apply(Assets* assets, bool refresh_display_theme) {
  }
  #endif // HAVE_LVGL
  
 -bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
 -    assets->partition_valid_ = false;
-+// bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
-+//     assets->partition_valid_ = false;
- 
+-
 -    if (!Assets::FindPartition(assets)) {
 -        return false;
 -    }
-+//     if (!Assets::FindPartition(assets)) {
-+//         return false;
-+//     }
- 
+-
 -    esp_err_t ret = ESP_ERR_INVALID_STATE;
 -    auto display = Board::GetInstance().GetDisplay();
 -    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
@@ -420,6 +421,52 @@ index ad61944..6b84daf 100644
 -    assets->partition_valid_ = ((ret == ESP_OK) ? true : false);
 -    return assets->partition_valid_;
 -}
+-
+-void Assets::EmoteStrategy::UnApplyPartition(Assets* assets) {
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        emote_unmount_assets(emote_display->GetEmoteHandle());
+-    }
+-    (void)assets; // Unused parameter
+-}
+-
+-bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) {
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        const uint8_t* data = nullptr;
+-        size_t data_size = 0;
+-        if (ESP_OK == emote_get_asset_data_by_name(emote_display->GetEmoteHandle(), name.c_str(), &data, &data_size)) {
+-            ptr = const_cast<void*>(static_cast<const void*>(data));
+-            size = data_size;
+-            return true;
+-        }
+-        ESP_LOGE(TAG, "Failed to get asset data by name: %s", name.c_str());
+-        return false;
+-    }
+-    (void)assets; // Unused parameter
+-    return false;
+-}
+-
+-bool Assets::EmoteStrategy::Apply(Assets* assets, bool refresh_display_theme) {
+-    Assets::LoadSrmodelsFromIndex(assets);
+-
+-    auto display = Board::GetInstance().GetDisplay();
+-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
+-
+-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
+-        emote_load_assets(emote_display->GetEmoteHandle());
+-    }
+-    return true;
+-}
++// bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
++//     assets->partition_valid_ = false;
++
++//     if (!Assets::FindPartition(assets)) {
++//         return false;
++//     }
++
 +//     esp_err_t ret = ESP_ERR_INVALID_STATE;
 +//     auto display = Board::GetInstance().GetDisplay();
 +//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
@@ -440,15 +487,7 @@ index ad61944..6b84daf 100644
 +//     assets->partition_valid_ = ((ret == ESP_OK) ? true : false);
 +//     return assets->partition_valid_;
 +// }
- 
--void Assets::EmoteStrategy::UnApplyPartition(Assets* assets) {
--    auto display = Board::GetInstance().GetDisplay();
--    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
--    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
--        emote_unmount_assets(emote_display->GetEmoteHandle());
--    }
--    (void)assets; // Unused parameter
--}
++
 +// void Assets::EmoteStrategy::UnApplyPartition(Assets* assets) {
 +//     auto display = Board::GetInstance().GetDisplay();
 +//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
@@ -457,24 +496,7 @@ index ad61944..6b84daf 100644
 +//     }
 +//     (void)assets; // Unused parameter
 +// }
- 
--bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) {
--    auto display = Board::GetInstance().GetDisplay();
--    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
--    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
--        const uint8_t* data = nullptr;
--        size_t data_size = 0;
--        if (ESP_OK == emote_get_asset_data_by_name(emote_display->GetEmoteHandle(), name.c_str(), &data, &data_size)) {
--            ptr = const_cast<void*>(static_cast<const void*>(data));
--            size = data_size;
--            return true;
--        }
--        ESP_LOGE(TAG, "Failed to get asset data by name: %s", name.c_str());
--        return false;
--    }
--    (void)assets; // Unused parameter
--    return false;
--}
++
 +// bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) {
 +//     auto display = Board::GetInstance().GetDisplay();
 +//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
@@ -492,22 +514,13 @@ index ad61944..6b84daf 100644
 +//     (void)assets; // Unused parameter
 +//     return false;
 +// }
- 
--bool Assets::EmoteStrategy::Apply(Assets* assets) {
--    Assets::LoadSrmodelsFromIndex(assets);
-+// bool Assets::EmoteStrategy::Apply(Assets* assets) {
++
++// bool Assets::EmoteStrategy::Apply(Assets* assets, bool refresh_display_theme) {
 +//     Assets::LoadSrmodelsFromIndex(assets);
- 
--    auto display = Board::GetInstance().GetDisplay();
--    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
++
 +//     auto display = Board::GetInstance().GetDisplay();
 +//     auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
- 
--    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
--        emote_load_assets(emote_display->GetEmoteHandle());
--    }
--    return true;
--}
++
 +//     if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
 +//         emote_load_assets(emote_display->GetEmoteHandle());
 +//     }
@@ -516,24 +529,24 @@ index ad61944..6b84daf 100644
  
  bool Assets::Download(std::string url, std::function<void(int progress, size_t speed)> progress_callback) {
      ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
-diff --git c/main/assets.h w/main/assets.h
-index 3692e0c..7bfbc5c 100644
---- c/main/assets.h
-+++ w/main/assets.h
+diff --git a/main/assets.h b/main/assets.h
+index 2c1b7a1..018a861 100644
+--- a/main/assets.h
++++ b/main/assets.h
 @@ -68,13 +68,13 @@ private:
          bool checksum_valid_ = false;
      };
      
 -    class EmoteStrategy : public AssetStrategy {
 -    public:
--        bool Apply(Assets* assets) override;
+-        bool Apply(Assets* assets, bool refresh_display_theme = true) override;
 -        bool InitializePartition(Assets* assets) override;
 -        void UnApplyPartition(Assets* assets) override;
 -        bool GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) override;
 -    };
 +    // class EmoteStrategy : public AssetStrategy {
 +    // public:
-+    //     bool Apply(Assets* assets) override;
++    //     bool Apply(Assets* assets, bool refresh_display_theme = true) override;
 +    //     bool InitializePartition(Assets* assets) override;
 +    //     void UnApplyPartition(Assets* assets) override;
 +    //     bool GetAssetData(Assets* assets, const std::string& name, void*& ptr, size_t& size) override;
@@ -541,11 +554,11 @@ index 3692e0c..7bfbc5c 100644
      
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
-diff --git c/main/audio/audio_service.cc w/main/audio/audio_service.cc
-index 350ac58..ab2912d 100644
---- c/main/audio/audio_service.cc
-+++ w/main/audio/audio_service.cc
-@@ -158,12 +158,13 @@ void AudioService::Start() {
+diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
+index 24cc272..bbae066 100644
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -155,12 +155,13 @@ void AudioService::Start() {
      }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
  #endif
  
@@ -562,7 +575,7 @@ index 350ac58..ab2912d 100644
  }
  
  void AudioService::Stop() {
-@@ -270,6 +271,12 @@ void AudioService::AudioInputTask() {
+@@ -267,6 +268,12 @@ void AudioService::AudioInputTask() {
              int samples = 160; // 10ms
              std::vector<int16_t> data;
              if (ReadAudioData(data, 16000, samples)) {
@@ -572,14 +585,14 @@ index 350ac58..ab2912d 100644
 +                if (stereo_frame_callback_ && codec_->input_channels() == 2) {
 +                    stereo_frame_callback_(data);
 +                }
-                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
-                     wake_word_->Feed(data);
-                 }
-diff --git c/main/audio/audio_service.h w/main/audio/audio_service.h
-index 99db546..4e0b5dc 100644
---- c/main/audio/audio_service.h
-+++ w/main/audio/audio_service.h
-@@ -38,7 +38,7 @@
+                 audio_engine_->Feed(std::move(data));
+                 continue;
+             }
+diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
+index c3afa13..1948c3d 100644
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -37,7 +37,7 @@
  
  #define OPUS_FRAME_DURATION_MS 60
  #define MAX_ENCODE_TASKS_IN_QUEUE 2
@@ -588,7 +601,7 @@ index 99db546..4e0b5dc 100644
  #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
  #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
  #define AUDIO_TESTING_MAX_DURATION_MS 10000
-@@ -127,6 +127,14 @@ public:
+@@ -126,6 +126,14 @@ public:
  
      void SetCallbacks(AudioServiceCallbacks& callbacks);
  
@@ -603,82 +616,19 @@ index 99db546..4e0b5dc 100644
      bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
      std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
      void PlaySound(const std::string_view& sound);
-@@ -137,6 +145,8 @@ public:
+@@ -136,6 +144,8 @@ public:
  private:
      AudioCodec* codec_ = nullptr;
      AudioServiceCallbacks callbacks_;
 +    // Dotty: stereo frame callback for ambient sound localization.
 +    std::function<void(const std::vector<int16_t>&)> stereo_frame_callback_;
-     std::unique_ptr<AudioProcessor> audio_processor_;
-     std::unique_ptr<WakeWord> wake_word_;
+     std::unique_ptr<AudioEngine> audio_engine_;
      std::unique_ptr<AudioDebugger> audio_debugger_;
-diff --git c/main/audio/wake_words/afe_wake_word.cc w/main/audio/wake_words/afe_wake_word.cc
-index 8fc5fef..f0f3a42 100644
---- c/main/audio/wake_words/afe_wake_word.cc
-+++ w/main/audio/wake_words/afe_wake_word.cc
-@@ -162,6 +162,10 @@ void AfeWakeWord::AudioDetectionTask() {
- 
- void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
-     // store audio data to wake_word_pcm_
-+    // Mutex-protected: the encoder task in EncodeWakeWordData() also iterates
-+    // wake_word_pcm_; concurrent emplace/pop here vs. range-for there
-+    // corrupts the deque and triggers tlsf_free double-free on dtor.
-+    std::lock_guard<std::mutex> lock(wake_word_mutex_);
-     wake_word_pcm_.emplace_back(std::vector<int16_t>(data, data + samples));
-     // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
-     while (wake_word_pcm_.size() > 2000 / 30) {
-@@ -171,7 +175,13 @@ void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
- 
- void AfeWakeWord::EncodeWakeWordData() {
-     const size_t stack_size = 4096 * 6;
--    wake_word_opus_.clear();
-+    {
-+        // wake_word_opus_ is consumed by GetWakeWordOpus under the same
-+        // mutex; clear here must be locked too or the consumer can race
-+        // with the deque resetting and dereference invalid memory.
-+        std::lock_guard<std::mutex> lock(wake_word_mutex_);
-+        wake_word_opus_.clear();
-+    }
-     if (wake_word_encode_task_stack_ == nullptr) {
-         wake_word_encode_task_stack_ = (StackType_t*)heap_caps_malloc(stack_size, MALLOC_CAP_SPIRAM);
-         assert(wake_word_encode_task_stack_ != nullptr);
-@@ -208,8 +218,19 @@ void AfeWakeWord::EncodeWakeWordData() {
-             std::vector<int16_t> in_buffer;
-             esp_audio_enc_in_frame_t in = {};
-             esp_audio_enc_out_frame_t out = {};
--            
--            for (auto& pcm: this_->wake_word_pcm_) {
-+
-+            // Drain wake_word_pcm_ under the mutex into a local copy so we
-+            // can iterate without racing StoreWakeWordData() (called from
-+            // the audio detection callback). Iterating the live deque while
-+            // the producer mutates it corrupts the structure and causes a
-+            // tlsf_free double-free when vectors are later destroyed.
-+            std::deque<std::vector<int16_t>> local_pcm;
-+            {
-+                std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
-+                local_pcm.swap(this_->wake_word_pcm_);
-+            }
-+
-+            for (auto& pcm: local_pcm) {
-                 if (in_buffer.empty()) {
-                     in_buffer = std::move(pcm);
-                 } else {
-@@ -238,7 +259,9 @@ void AfeWakeWord::EncodeWakeWordData() {
-                     in_buffer.erase(in_buffer.begin(), in_buffer.begin() + frame_size);
-                 }
-             }
--            this_->wake_word_pcm_.clear();
-+            // local_pcm goes out of scope at lambda end and frees its own
-+            // vectors safely; no clear of the live deque needed (we already
-+            // moved its contents out under the mutex above).
-             // Close encoder
-             esp_opus_enc_close(encoder_handle);
-             auto end_time = esp_timer_get_time();
-diff --git c/main/boards/common/i2c_device.cc w/main/boards/common/i2c_device.cc
+     void* opus_encoder_ = nullptr;
+diff --git a/main/boards/common/i2c_device.cc b/main/boards/common/i2c_device.cc
 index 835997d..1061416 100644
---- c/main/boards/common/i2c_device.cc
-+++ w/main/boards/common/i2c_device.cc
+--- a/main/boards/common/i2c_device.cc
++++ b/main/boards/common/i2c_device.cc
 @@ -21,15 +21,29 @@ I2cDevice::I2cDevice(i2c_master_bus_handle_t i2c_bus, uint8_t addr) {
  
  void I2cDevice::WriteReg(uint8_t reg, uint8_t value) {
@@ -713,10 +663,10 @@ index 835997d..1061416 100644
 +    }
  }
 \ No newline at end of file
-diff --git c/main/mcp_server.cc w/main/mcp_server.cc
-index 7cd7ba0..8f6ca17 100644
---- c/main/mcp_server.cc
-+++ w/main/mcp_server.cc
+diff --git a/main/mcp_server.cc b/main/mcp_server.cc
+index a8b7624..e9b4cc4 100644
+--- a/main/mcp_server.cc
++++ b/main/mcp_server.cc
 @@ -13,6 +13,7 @@
  #include "application.h"
  #include "display.h"
@@ -733,15 +683,14 @@ index 7cd7ba0..8f6ca17 100644
                  TaskPriorityReset priority_reset(1);
  
                  if (!camera->Capture()) {
-diff --git c/main/protocols/protocol.cc w/main/protocols/protocol.cc
-index 470cc91..53675f5 100644
---- c/main/protocols/protocol.cc
-+++ w/main/protocols/protocol.cc
-@@ -78,6 +78,14 @@ void Protocol::SendMcpMessage(const std::string& payload) {
+diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
+index 470cc91..0dab684 100644
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -78,6 +78,13 @@ void Protocol::SendMcpMessage(const std::string& payload) {
      SendText(message);
  }
  
-+// Dotty: ambient perception event frame.
 +void Protocol::SendEvent(const std::string& name, const std::string& data_json) {
 +    std::string message = "{\"session_id\":\"" + session_id_ +
 +                          "\",\"type\":\"event\",\"name\":\"" + name +
@@ -752,10 +701,10 @@ index 470cc91..53675f5 100644
  bool Protocol::IsTimeout() const {
      const int kTimeoutSeconds = 120;
      auto now = std::chrono::steady_clock::now();
-diff --git c/main/protocols/protocol.h w/main/protocols/protocol.h
+diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
 index 28ef604..fd66f0f 100644
---- c/main/protocols/protocol.h
-+++ w/main/protocols/protocol.h
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
 @@ -73,6 +73,14 @@ public:
      virtual void SendStopListening();
      virtual void SendAbortSpeaking(AbortReason reason);
@@ -779,10 +728,10 @@ index 28ef604..fd66f0f 100644
  };
  
  #endif // PROTOCOL_H
-diff --git c/main/protocols/websocket_protocol.cc w/main/protocols/websocket_protocol.cc
-index f0cc034..34739af 100644
---- c/main/protocols/websocket_protocol.cc
-+++ w/main/protocols/websocket_protocol.cc
+diff --git a/main/protocols/websocket_protocol.cc b/main/protocols/websocket_protocol.cc
+index 4b74a5e..b677022 100644
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
 @@ -78,6 +78,7 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
  void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
      (void)send_goodbye;  // Websocket doesn't need to send goodbye message
@@ -792,7 +741,7 @@ index f0cc034..34739af 100644
  
  bool WebsocketProtocol::OpenAudioChannel() {
 @@ -150,6 +151,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
-             auto root = cJSON_Parse(data);
+             auto root = cJSON_ParseWithLength(data, len);
              auto type = cJSON_GetObjectItem(root, "type");
              if (cJSON_IsString(type)) {
 +                ESP_LOGE(TAG, "WS recv type=%s", type->valuestring);
