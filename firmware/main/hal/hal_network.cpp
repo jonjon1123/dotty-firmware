@@ -9,12 +9,14 @@
 #include <mooncake_log.h>
 #include <wifi_manager.h>
 #include <board.h>
+#include <settings.h>
 #include <mutex>
 #include <queue>
 #include <vector>
 #include <ctime>
 #include <sys/time.h>
 #include <esp_sntp.h>
+#include <esp_http_client.h>
 #include <atomic>
 
 static std::string _tag           = "Network";
@@ -148,4 +150,95 @@ WifiStatus Hal::getWifiStatus()
         return WifiStatus::Medium;
     }
     return WifiStatus::Low;
+}
+
+void Hal::enterWifiConfigMode()
+{
+    mclog::tagInfo(_tag, "entering WiFi config mode (captive portal)");
+    auto& wifi = WifiManager::GetInstance();
+    if (!wifi.IsInitialized()) {
+        mclog::tagInfo(_tag, "initializing WifiManager");
+        WifiManagerConfig config;
+        config.ssid_prefix = "StackChan";
+        config.language = "en-US";
+        wifi.Initialize(config);
+    }
+    wifi.StartConfigAp();
+}
+
+bool Hal::waitForWifiConnected(uint32_t timeout_ms)
+{
+    mclog::tagInfo(_tag, "waiting for WiFi connection, timeout={}ms", timeout_ms);
+    auto& wifi = WifiManager::GetInstance();
+
+    // If already connected, return immediately
+    if (wifi.IsConnected()) {
+        mclog::tagInfo(_tag, "WiFi already connected");
+        return true;
+    }
+
+    // Start station mode to try connecting with saved credentials
+    wifi.StartStation();
+
+    uint32_t start = millis();
+    while (!wifi.IsConnected()) {
+        delay(500);
+        if (millis() - start > timeout_ms) {
+            mclog::tagInfo(_tag, "WiFi connection timed out");
+            return false;
+        }
+    }
+
+    mclog::tagInfo(_tag, "WiFi connected successfully");
+    return true;
+}
+
+bool Hal::verifyOtaUrl(const std::string& url)
+{
+    if (url.empty()) {
+        mclog::tagInfo(_tag, "OTA URL is empty");
+        return false;
+    }
+
+    mclog::tagInfo(_tag, "verifying OTA URL: {}", url);
+
+    esp_http_client_config_t config = {};
+    config.url = url.c_str();
+    config.timeout_ms = 5000;
+    config.disable_auto_redirect = false;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        mclog::tagError(_tag, "failed to create HTTP client for OTA URL verification");
+        return false;
+    }
+
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        mclog::tagError(_tag, "failed to connect to OTA URL: {}", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    int content_length = esp_http_client_fetch_headers(client);
+    int status_code = esp_http_client_get_status_code(client);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    // Accept any HTTP response (2xx, 3xx, even 4xx means server is reachable)
+    if (status_code >= 200 && status_code < 500) {
+        mclog::tagInfo(_tag, "OTA URL verified, status={}", status_code);
+        return true;
+    }
+
+    mclog::tagError(_tag, "OTA URL returned error status={}", status_code);
+    return false;
+}
+
+void Hal::setAppConfiged(bool configured)
+{
+    Settings settings("app_config", true);
+    settings.SetBool("is_configed", configured);
+    mclog::tagInfo(_tag, "app_configed set to {}", configured);
 }

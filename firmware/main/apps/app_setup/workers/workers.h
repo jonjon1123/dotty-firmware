@@ -66,8 +66,11 @@ private:
 };
 
 /**
- * @brief
+ * @brief WiFi setup worker using captive portal
  *
+ * Shows instructions on the device display, starts a captive portal AP,
+ * waits for the user to configure WiFi + OTA URL via a web browser,
+ * then verifies the connection and OTA URL before proceeding.
  */
 class WifiSetupWorker : public WorkerBase {
 public:
@@ -78,64 +81,72 @@ public:
 private:
     enum class State {
         None,
-        AppDownload,
-        WaitAppConnection,
-        AppConnected,
+        ShowInstructions,
+        WaitConfig,
+        VerifyConfig,
         Done,
+        Failed,
     };
 
-    State _state      = State::AppDownload;
+    State _state      = State::ShowInstructions;
     State _last_state = State::None;
 
     uint32_t _last_tick = 0;
     bool _is_first_in   = false;
+    bool _config_exit_received = false;
 
-    AppConfigEvent _last_app_config_event = AppConfigEvent::None;
-    int _app_config_signal_id             = -1;
-
-    struct StateAppDownloadData {
+    struct StateInstructionsData {
         std::unique_ptr<uitk::lvgl_cpp::Container> panel;
         std::unique_ptr<uitk::lvgl_cpp::Label> title;
-        std::unique_ptr<uitk::lvgl_cpp::Qrcode> qrcode_ios;
-        std::unique_ptr<uitk::lvgl_cpp::Qrcode> qrcode_android;
-        std::unique_ptr<uitk::lvgl_cpp::Label> label_ios;
-        std::unique_ptr<uitk::lvgl_cpp::Label> label_android;
-        std::unique_ptr<uitk::lvgl_cpp::Button> btn_next;
-        std::unique_ptr<uitk::lvgl_cpp::Button> btn_quit;
+        std::unique_ptr<uitk::lvgl_cpp::Label> ap_name;
         std::unique_ptr<uitk::lvgl_cpp::Label> info;
-        bool next_clicked = false;
-        bool quit_clicked = false;
+        std::unique_ptr<uitk::lvgl_cpp::Label> url;
+        std::unique_ptr<uitk::lvgl_cpp::Label> url_value;
+        std::unique_ptr<uitk::lvgl_cpp::Label> hint;
+        std::unique_ptr<uitk::lvgl_cpp::Label> ota_example;
 
         void reset()
         {
             panel.reset();
             title.reset();
-            qrcode_ios.reset();
-            qrcode_android.reset();
-            label_ios.reset();
-            label_android.reset();
-            btn_next.reset();
-            btn_quit.reset();
+            ap_name.reset();
             info.reset();
-            next_clicked = false;
-            quit_clicked = false;
+            url.reset();
+            url_value.reset();
+            hint.reset();
+            ota_example.reset();
         }
     };
-    StateAppDownloadData _state_app_download_data;
+    StateInstructionsData _state_instructions_data;
 
-    struct StateWaitAppConnectionData {
+    struct StateVerifyData {
         std::unique_ptr<uitk::lvgl_cpp::Container> panel;
-        std::unique_ptr<uitk::lvgl_cpp::Button> btn_id;
         std::unique_ptr<uitk::lvgl_cpp::Label> info;
 
         void reset()
         {
             panel.reset();
-            btn_id.reset();
             info.reset();
         }
     };
-    StateWaitAppConnectionData _state_wait_app_connection_data;
+    StateVerifyData _state_verify_data;
+
+    struct StateFailedData {
+        std::unique_ptr<uitk::lvgl_cpp::Container> panel;
+        std::unique_ptr<uitk::lvgl_cpp::Label> info;
+        std::unique_ptr<uitk::lvgl_cpp::Button> btn_retry;
+
+        bool retry_clicked = false;
+
+        void reset()
+        {
+            panel.reset();
+            info.reset();
+            btn_retry.reset();
+            retry_clicked = false;
+        }
+    };
+    StateFailedData _state_failed_data;
 
     struct StateDoneData {
         int reboot_count = 0;
@@ -145,6 +156,7 @@ private:
     void update_state();
     void cleanup_ui();
     void switch_state(State newState);
+    bool verify_and_connect();
 };
 
 /**
@@ -203,11 +215,6 @@ public:
     public:
         PageStartup();
 
-        bool isSkipClicked() const
-        {
-            return _is_skip_clicked;
-        }
-
         bool isStartClicked() const
         {
             return _is_start_clicked;
@@ -216,10 +223,8 @@ public:
     private:
         std::unique_ptr<uitk::lvgl_cpp::Container> _panel;
         std::unique_ptr<uitk::lvgl_cpp::Label> _info;
-        std::unique_ptr<uitk::lvgl_cpp::Button> _btn_skip;
         std::unique_ptr<uitk::lvgl_cpp::Button> _btn_start;
 
-        bool _is_skip_clicked  = false;
         bool _is_start_clicked = false;
     };
 

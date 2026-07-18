@@ -285,6 +285,10 @@ public:
 
     /* --------------------------------- Network -------------------------------- */
     void startNetwork(std::function<void(std::string_view)> onLog);
+    void enterWifiConfigMode();
+    bool waitForWifiConnected(uint32_t timeout_ms);
+    bool verifyOtaUrl(const std::string& url);
+    void setAppConfiged(bool configured);
     WifiStatus getWifiStatus();
     void startSntp();
 

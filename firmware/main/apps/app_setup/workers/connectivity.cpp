@@ -7,8 +7,9 @@
 #include <src/misc/lv_area.h>
 #include <src/misc/lv_text.h>
 #include <stackchan/stackchan.h>
-#include <ArduinoJson.hpp>
 #include <mooncake_log.h>
+#include <wifi_manager.h>
+#include <settings.h>
 #include <hal/hal.h>
 #include <memory>
 
@@ -20,7 +21,7 @@ static std::string _tag = "Setup-Connectivity";
 
 WifiSetupWorker::WifiSetupWorker()
 {
-    _state       = State::AppDownload;
+    _state       = State::ShowInstructions;
     _last_state  = State::None;
     _is_first_in = true;
 
@@ -35,7 +36,6 @@ WifiSetupWorker::WifiSetupWorker()
 
 WifiSetupWorker::~WifiSetupWorker()
 {
-    GetHAL().onAppConfigEvent.disconnect(_app_config_signal_id);
     GetStackChan().resetAvatar();
 }
 
@@ -48,11 +48,18 @@ void WifiSetupWorker::update()
 void WifiSetupWorker::update_state()
 {
     switch (_state) {
-        case State::AppDownload: {
+        case State::ShowInstructions: {
             if (_is_first_in) {
                 _is_first_in = false;
 
-                auto& data = _state_app_download_data;
+                // Start the captive portal
+                GetHAL().enterWifiConfigMode();
+
+                auto& wifi = WifiManager::GetInstance();
+                std::string ap_ssid = wifi.GetApSsid();
+                std::string ap_url  = wifi.GetApWebUrl();
+
+                auto& data = _state_instructions_data;
 
                 data.panel = std::make_unique<Container>(lv_screen_active());
                 data.panel->setBgColor(lv_color_hex(0xEDF4FF));
@@ -60,96 +67,81 @@ void WifiSetupWorker::update_state()
                 data.panel->setBorderWidth(0);
                 data.panel->setSize(320, 240);
                 data.panel->setRadius(0);
+                data.panel->setPadding(0, 0, 0, 0);
 
                 data.title = std::make_unique<Label>(lv_screen_active());
                 data.title->setTextFont(&lv_font_montserrat_20);
                 data.title->setTextColor(lv_color_hex(0x7E7B9C));
-                data.title->align(LV_ALIGN_TOP_MID, 0, 0);
-                data.title->setText("APP SETUP");
+                data.title->align(LV_ALIGN_TOP_MID, 0, 5);
+                data.title->setText("CONNECTIVITY SETUP");
+
+                data.ap_name = std::make_unique<Label>(lv_screen_active());
+                data.ap_name->setTextFont(&lv_font_montserrat_16);
+                data.ap_name->setTextColor(lv_color_hex(0x26206A));
+                data.ap_name->align(LV_ALIGN_TOP_MID, 0, 35);
+                data.ap_name->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.ap_name->setText("Connect to Wi-Fi network:");
 
                 data.info = std::make_unique<Label>(lv_screen_active());
-                data.info->setTextFont(&lv_font_montserrat_14);
+                data.info->setTextFont(&lv_font_montserrat_24);
                 data.info->setTextColor(lv_color_hex(0x26206A));
-                data.info->align(LV_ALIGN_TOP_MID, 0, 27);
+                data.info->align(LV_ALIGN_TOP_MID, 0, 55);
                 data.info->setTextAlign(LV_TEXT_ALIGN_CENTER);
-                data.info->setText("Install \"StackChan World\" app\nand login to your M5Stack account");
+                data.info->setText(ap_ssid);
 
-                std::string qrcode_text = "https://apps.apple.com/us/app/stackchan-world/id6756086326";
-                data.qrcode_ios         = std::make_unique<Qrcode>(lv_screen_active());
-                data.qrcode_ios->setSize(80);
-                data.qrcode_ios->setDarkColor(lv_color_hex(0x221C5B));
-                data.qrcode_ios->setLightColor(lv_color_hex(0xEDF4FF));
-                data.qrcode_ios->update(qrcode_text);
-                data.qrcode_ios->align(LV_ALIGN_CENTER, -65, -12);
+                data.url = std::make_unique<Label>(lv_screen_active());
+                data.url->setTextFont(&lv_font_montserrat_16);
+                data.url->setTextColor(lv_color_hex(0x525064));
+                data.url->align(LV_ALIGN_TOP_MID, 0, 93);
+                data.url->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.url->setText("Type into a browser:");
 
-                qrcode_text         = "https://play.google.com/store/apps/details?id=com.m5stack.stackchan";
-                data.qrcode_android = std::make_unique<Qrcode>(lv_screen_active());
-                data.qrcode_android->setSize(80);
-                data.qrcode_android->setDarkColor(lv_color_hex(0x221C5B));
-                data.qrcode_android->setLightColor(lv_color_hex(0xEDF4FF));
-                data.qrcode_android->update(qrcode_text);
-                data.qrcode_android->align(LV_ALIGN_CENTER, 65, -12);
+                data.url_value = std::make_unique<Label>(lv_screen_active());
+                data.url_value->setTextFont(&lv_font_montserrat_24);
+                data.url_value->setTextColor(lv_color_hex(0x26206A));
+                data.url_value->align(LV_ALIGN_TOP_MID, 0, 115);
+                data.url_value->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.url_value->setText(ap_url);
 
-                data.label_ios = std::make_unique<Label>(lv_screen_active());
-                data.label_ios->setTextFont(&lv_font_montserrat_14);
-                data.label_ios->setTextColor(lv_color_hex(0x26206A));
-                data.label_ios->align(LV_ALIGN_CENTER, -65, 47);
-                data.label_ios->setText("App Store\n(iOS)");
-                data.label_ios->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.hint = std::make_unique<Label>(lv_screen_active());
+                data.hint->setTextFont(&lv_font_montserrat_16);
+                data.hint->setTextColor(lv_color_hex(0x525064));
+                data.hint->align(LV_ALIGN_TOP_MID, 0, 155);
+                data.hint->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.hint->setText("Provide Wi-Fi Config and Custom\nOTA URL in the Advanced tab.");
 
-                data.label_android = std::make_unique<Label>(lv_screen_active());
-                data.label_android->setTextFont(&lv_font_montserrat_14);
-                data.label_android->setTextColor(lv_color_hex(0x26206A));
-                data.label_android->align(LV_ALIGN_CENTER, 65, 47);
-                data.label_android->setText("Play Store\n(Android)");
-                data.label_android->setTextAlign(LV_TEXT_ALIGN_CENTER);
-
-                data.btn_next = std::make_unique<Button>(lv_screen_active());
-                apply_button_common_style(*data.btn_next);
-                data.btn_next->align(LV_ALIGN_CENTER, 72, 91);
-                data.btn_next->setSize(112, 42);
-                data.btn_next->label().setText("Next");
-                data.btn_next->onClick().connect([this]() { _state_app_download_data.next_clicked = true; });
-
-                data.btn_quit = std::make_unique<Button>(lv_screen_active());
-                apply_button_common_style(*data.btn_quit);
-                data.btn_quit->align(LV_ALIGN_CENTER, -72, 91);
-                data.btn_quit->setSize(112, 42);
-                data.btn_quit->setBgColor(lv_color_hex(0xD4D9E0));
-                data.btn_quit->label().setText("Back");
-                data.btn_quit->label().setTextColor(lv_color_hex(0x525064));
-                data.btn_quit->onClick().connect([this]() { _state_app_download_data.quit_clicked = true; });
+                data.ota_example = std::make_unique<Label>(lv_screen_active());
+                data.ota_example->setTextFont(&lv_font_montserrat_14);
+                data.ota_example->setTextColor(lv_color_hex(0x525064));
+                data.ota_example->setWidth(320);
+                data.ota_example->alignTo(*data.hint, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+                data.ota_example->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.ota_example->setText("Example: http://<IP>:<PORT>/xiaozhi/ota/");
             }
 
-            if (_state_app_download_data.quit_clicked) {
-                _is_done = true;
-            }
-
-            if (_state_app_download_data.next_clicked) {
-                switch_state(State::WaitAppConnection);
-            }
-
-            // Check events
-            if (_last_app_config_event != AppConfigEvent::None) {
-                if (_last_app_config_event == AppConfigEvent::AppConnected) {
-                    switch_state(State::AppConnected);
+            // The captive portal's OnExitRequested fires when user submits config
+            // We detect this via the WifiManager exiting config mode
+            {
+                auto& wifi = WifiManager::GetInstance();
+                if (!wifi.IsConfigMode() && !_config_exit_received) {
+                    // Config mode was exited - user submitted credentials
+                    _config_exit_received = true;
+                    switch_state(State::VerifyConfig);
                 }
-                _last_app_config_event = AppConfigEvent::None;
             }
 
             break;
         }
-        case State::WaitAppConnection: {
+        case State::WaitConfig: {
+            // This state is no longer used - we go directly from ShowInstructions
+            // to VerifyConfig when the captive portal exit is detected.
+            break;
+        }
+        case State::VerifyConfig: {
             if (_is_first_in) {
                 _is_first_in = false;
 
-                // Start app config server
-                _app_config_signal_id =
-                    GetHAL().onAppConfigEvent.connect([this](AppConfigEvent event) { _last_app_config_event = event; });
-
-                GetHAL().startAppConfigServer();
-
-                auto& data = _state_wait_app_connection_data;
+                auto& data = _state_verify_data;
 
                 data.panel = std::make_unique<Container>(lv_screen_active());
                 data.panel->setBgColor(lv_color_hex(0xEDF4FF));
@@ -158,72 +150,21 @@ void WifiSetupWorker::update_state()
                 data.panel->setSize(320, 240);
                 data.panel->setRadius(0);
 
-                data.btn_id = std::make_unique<Button>(lv_screen_active());
-                apply_button_common_style(*data.btn_id);
-                data.btn_id->align(LV_ALIGN_CENTER, 0, -20);
-                data.btn_id->setSize(262, 52);
-                data.btn_id->onClick().connect([]() {
-                    auto& avatar = GetStackChan().avatar();
-                    avatar.clearDecorators();
-                    avatar.addDecorator(std::make_unique<avatar::HeartDecorator>(lv_screen_active(), 3000));
-                });
-                data.btn_id->label().setText(fmt::format("ID: {}", GetHAL().getFactoryMacString()));
-
                 data.info = std::make_unique<Label>(lv_screen_active());
-                data.info->setTextFont(&lv_font_montserrat_24);
+                data.info->setTextFont(&lv_font_montserrat_16);
                 data.info->setTextColor(lv_color_hex(0x26206A));
-                data.info->align(LV_ALIGN_BOTTOM_MID, 0, -26);
+                data.info->align(LV_ALIGN_CENTER, 0, 0);
                 data.info->setTextAlign(LV_TEXT_ALIGN_CENTER);
-                data.info->setText("Look for me in the app\nto start setup.");
+                data.info->setText("Verifying connection...");
 
-                auto& avatar = GetStackChan().avatar();
-                avatar.clearDecorators();
-                avatar.addDecorator(std::make_unique<avatar::HeartDecorator>(lv_screen_active(), 3000));
-            }
-
-            // Check events
-            if (_last_app_config_event != AppConfigEvent::None) {
-                if (_last_app_config_event == AppConfigEvent::AppConnected) {
-                    switch_state(State::AppConnected);
-                }
-                _last_app_config_event = AppConfigEvent::None;
-            }
-
-            break;
-        }
-        case State::AppConnected: {
-            if (_is_first_in) {
-                _is_first_in = false;
-
-                auto& avatar = GetStackChan().avatar();
-                avatar.leftEye().setVisible(true);
-                avatar.rightEye().setVisible(true);
-                avatar.mouth().setVisible(true);
-                avatar.setSpeech("Ready to Configure ~");
-
-                GetStackChan().addModifier(std::make_unique<TimedEmotionModifier>(avatar::Emotion::Happy, 4000));
-                GetStackChan().addModifier(std::make_unique<BreathModifier>());
-                GetStackChan().addModifier(std::make_unique<BlinkModifier>());
-                GetStackChan().addModifier(std::make_unique<SpeakingModifier>(2000, 180, false));
-            }
-
-            // Check events
-            if (_last_app_config_event != AppConfigEvent::None) {
-                if (_last_app_config_event == AppConfigEvent::AppDisconnected) {
-                    switch_state(State::WaitAppConnection);
-                } else if (_last_app_config_event == AppConfigEvent::TryWifiConnect) {
-                    auto& avatar = GetStackChan().avatar();
-                    avatar.setSpeech("Verifying...");
-                    GetStackChan().addModifier(std::make_unique<SpeakingModifier>(2000, 180, false));
-                } else if (_last_app_config_event == AppConfigEvent::WifiConnectFailed) {
-                    GetStackChan().addModifier(std::make_unique<TimedEmotionModifier>(avatar::Emotion::Sad, 4000));
-                    GetStackChan().addModifier(
-                        std::make_unique<TimedSpeechModifier>("Connect Failed. Try again?", 6000));
-                    GetStackChan().addModifier(std::make_unique<SpeakingModifier>(3000, 180, false));
-                } else if (_last_app_config_event == AppConfigEvent::WifiConnected) {
+                // Run verification in a task to avoid blocking the UI
+                if (verify_and_connect()) {
+                    // Success - mark as configured and proceed
+                    GetHAL().setAppConfiged(true);
                     switch_state(State::Done);
+                } else {
+                    switch_state(State::Failed);
                 }
-                _last_app_config_event = AppConfigEvent::None;
             }
 
             break;
@@ -237,8 +178,6 @@ void WifiSetupWorker::update_state()
                 avatar.rightEye().setVisible(true);
                 avatar.mouth().setVisible(true);
                 avatar.setEmotion(avatar::Emotion::Happy);
-
-                GetStackChan().addModifier(std::make_unique<SpeakingModifier>(1500, 180, false));
 
                 _state_done_data.reboot_count = 4;
             }
@@ -258,9 +197,79 @@ void WifiSetupWorker::update_state()
 
             break;
         }
+        case State::Failed: {
+            if (_is_first_in) {
+                _is_first_in = false;
+
+                auto& data = _state_failed_data;
+
+                data.panel = std::make_unique<Container>(lv_screen_active());
+                data.panel->setBgColor(lv_color_hex(0xEDF4FF));
+                data.panel->align(LV_ALIGN_CENTER, 0, 0);
+                data.panel->setBorderWidth(0);
+                data.panel->setSize(320, 240);
+                data.panel->setRadius(0);
+
+                data.info = std::make_unique<Label>(lv_screen_active());
+                data.info->setTextFont(&lv_font_montserrat_16);
+                data.info->setTextColor(lv_color_hex(0xCC0000));
+                data.info->align(LV_ALIGN_TOP_MID, 0, 30);
+                data.info->setTextAlign(LV_TEXT_ALIGN_CENTER);
+                data.info->setText("Setup failed!\nWi-Fi or OTA URL\nis not configured.");
+
+                data.btn_retry = std::make_unique<Button>(lv_screen_active());
+                apply_button_common_style(*data.btn_retry);
+                data.btn_retry->align(LV_ALIGN_CENTER, 0, 60);
+                data.btn_retry->setSize(160, 48);
+                data.btn_retry->label().setText("Try Again");
+                data.btn_retry->label().setTextFont(&lv_font_montserrat_20);
+                data.btn_retry->onClick().connect([this]() { _state_failed_data.retry_clicked = true; });
+            }
+
+            if (_state_failed_data.retry_clicked) {
+                _config_exit_received = false;
+                switch_state(State::ShowInstructions);
+            }
+
+            break;
+        }
         default:
             break;
     }
+}
+
+bool WifiSetupWorker::verify_and_connect()
+{
+    mclog::tagInfo(_tag, "starting verification: WiFi + OTA URL");
+
+    // Step 1: Connect to WiFi
+    auto& avatar = GetStackChan().avatar();
+    avatar.setSpeech("Connecting to Wi-Fi...");
+
+    if (!GetHAL().waitForWifiConnected(30000)) {
+        mclog::tagError(_tag, "WiFi connection failed during verification");
+        return false;
+    }
+
+    // Step 2: Read OTA URL from NVS and verify it
+    avatar.setSpeech("Checking OTA server...");
+
+    Settings settings("wifi", false);
+    std::string ota_url = settings.GetString("ota_url");
+
+    if (ota_url.empty()) {
+        mclog::tagError(_tag, "OTA URL is not set in NVS");
+        return false;
+    }
+
+    if (!GetHAL().verifyOtaUrl(ota_url)) {
+        mclog::tagError(_tag, "OTA URL verification failed: {}", ota_url);
+        return false;
+    }
+
+    mclog::tagInfo(_tag, "all checks passed: WiFi connected, OTA URL verified");
+    avatar.setSpeech("Setup complete!");
+    return true;
 }
 
 void WifiSetupWorker::cleanup_ui()
@@ -270,20 +279,22 @@ void WifiSetupWorker::cleanup_ui()
     }
 
     switch (_last_state) {
-        case State::AppDownload: {
-            _state_app_download_data.reset();
+        case State::ShowInstructions: {
+            _state_instructions_data.reset();
             break;
         }
-        case State::WaitAppConnection: {
-            _state_wait_app_connection_data.reset();
+        case State::WaitConfig: {
             break;
         }
-        case State::AppConnected: {
-            GetStackChan().avatar().setSpeech("");
-            GetStackChan().clearModifiers();
+        case State::VerifyConfig: {
+            _state_verify_data.reset();
             break;
         }
         case State::Done: {
+            break;
+        }
+        case State::Failed: {
+            _state_failed_data.reset();
             break;
         }
         default:

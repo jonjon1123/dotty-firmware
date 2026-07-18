@@ -44,8 +44,14 @@ void AppSetup::onOpen()
 
     _menu_sections = {
         {
-            "Wi-Fi",
+            "Connectivity",
             {{"Change Wi-Fi",
+              [&]() {
+                  _destroy_menu    = true;
+                  _need_warm_reset = true;
+                  _worker          = std::make_unique<WifiSetupWorker>();
+              }},
+             {"Change OTA URL",
               [&]() {
                   _destroy_menu    = true;
                   _need_warm_reset = true;
@@ -103,15 +109,7 @@ void AppSetup::onOpen()
                   _worker       = std::make_unique<RgbTestWorker>();
               }}},
         },
-        {
-            "Account",
-            {{"Unbind & Reset",
-              [&]() {
-                  _destroy_menu    = true;
-                  _need_warm_reset = true;
-                  _worker          = std::make_unique<AccountWorker>();
-              }}},
-        },
+
         {
             "Firmware",
             {
