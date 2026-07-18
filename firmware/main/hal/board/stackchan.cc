@@ -86,9 +86,17 @@ public:
 
     // Returns true once per long-press event. Clears the PKEY long-press flag
     // (W1C) so subsequent polls only fire on new presses.
+    // Uses a raw I2C read so we can distinguish a bus error from a genuine
+    // long-press bit — ReadReg() returns 0xFF on failure, which would
+    // falsely match bit 2 and trigger an unwanted shutdown.
     bool ConsumePekLongPress()
     {
-        uint8_t status = ReadReg(0x49);
+        uint8_t reg   = 0x49;
+        uint8_t status = 0;
+        esp_err_t err = i2c_master_transmit_receive(i2c_device_, &reg, 1, &status, 1, 100);
+        if (err != ESP_OK) {
+            return false;
+        }
         if (status & 0x04) {
             WriteReg(0x49, 0x04);
             return true;
