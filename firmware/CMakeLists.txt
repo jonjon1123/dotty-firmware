@@ -2,6 +2,8 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
+set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON)
+
 set(PROJECT_VER "1.4.3")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 
@@ -17,6 +19,16 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults.local")
         "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults;${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults.local"
         CACHE STRING "ESP-IDF sdkconfig default files (auto-extended with local overlay)" FORCE)
     message(STATUS "StackChan: detected sdkconfig.defaults.local, applying overlay")
+endif()
+
+# Remove duplicate qrcodegen.c from esp_emote_gfx before any component globs it.
+# Both esp_emote_gfx and LVGL (LV_USE_QRCODE=y) bundle the same Nayuki library;
+# only LVGL's copy is needed (the uitk::lvgl_cpp::Qrcode wrapper and
+# qrcode_wrapper.c both resolve against LVGL's symbols at link time).
+set(_EMOTE_QRCODEGEN
+    "${CMAKE_CURRENT_SOURCE_DIR}/managed_components/espressif2022__esp_emote_gfx/src/lib/qrcode/qrcodegen.c")
+if(EXISTS "${_EMOTE_QRCODEGEN}")
+    file(REMOVE "${_EMOTE_QRCODEGEN}")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
