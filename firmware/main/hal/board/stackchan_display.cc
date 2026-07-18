@@ -790,6 +790,7 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
                 [](const std::vector<int16_t>& lr) {
                     stackchan::SoundLocalizer::Instance().OnStereoFrame(lr);
                 });
+        }
 
         _is_xiaozhi_idle = true;
     } else {

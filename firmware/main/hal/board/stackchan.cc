@@ -222,21 +222,7 @@ public:
 
     bool UpdateTouchPoint()
     {
-        auto err = TryReadRegs(0x02, read_buffer_, 6);
-        if (err != ESP_OK) {
-            tp_.num = 0;
-            tp_.x   = -1;
-            tp_.y   = -1;
-
-            consecutive_failures_++;
-            int64_t now_us = esp_timer_get_time();
-            if (last_error_log_us_ == 0 || (now_us - last_error_log_us_) >= 1000 * 1000) {
-                ESP_LOGW(TAG, "FT6336 read failed (%s), skipped %lu sample(s)", esp_err_to_name(err),
-                         static_cast<unsigned long>(consecutive_failures_));
-                last_error_log_us_ = now_us;
-            }
-            return false;
-        }
+        ReadRegs(0x02, read_buffer_, 6);
 
         consecutive_failures_ = 0;
         tp_.num               = read_buffer_[0] & 0x0F;
