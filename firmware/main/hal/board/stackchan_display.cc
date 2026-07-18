@@ -124,7 +124,8 @@ StackChanAvatarDisplay::StackChanAvatarDisplay(esp_lcd_panel_io_handle_t panel_i
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    port_cfg.task_priority   = 20;
+    // port_cfg.task_priority   = 20;
+    port_cfg.task_priority = 3;
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     port_cfg.task_affinity = 1;
 #endif
@@ -296,7 +297,14 @@ void StackChanAvatarDisplay::SetupUI()
     auto avatar = std::make_unique<DefaultAvatar>();
     avatar->init(lv_screen_active());
     avatar->getPanel()->onClick().connect([]() {
+        static uint32_t last_toggle_tick = 0;
+        const uint32_t now               = GetHAL().millis();
+        if (last_toggle_tick != 0 && now - last_toggle_tick < 2000) {
+            return;
+        }
+
         if (hal_bridge::is_xiaozhi_ready()) {
+            last_toggle_tick = now;
             hal_bridge::toggle_xiaozhi_chat_state();
         }
     });
@@ -319,6 +327,9 @@ void StackChanAvatarDisplay::SetupUI()
     // GetHAL().startStackChanAutoUpdate(24);
 
     FaceDetector::getInstance().start();
+
+    auto config        = hal_bridge::get_xiaozhi_config();
+    idle_motion_level_ = config.idleRandomMovementLevel;
 
     ESP_LOGI(TAG, "Avatar created and started");
 
@@ -378,6 +389,27 @@ static void set_listening_pixel(bool on)
             on ? "{\"listening\":true}" : "{\"listening\":false}");
         last_emitted = on;
         initialised  = true;
+    }
+}
+
+void StackChanAvatarDisplay::CreateIdleMotionModifier()
+{
+    auto& stackchan = GetStackChan();
+
+    switch (idle_motion_level_) {
+        case 0:
+            idle_motion_modifier_id_ = -1;
+            return;
+        case 1:
+            idle_motion_modifier_id_ = stackchan.addModifier(std::make_unique<IdleMotionModifier>(8000, 12000));
+            return;
+        case 3:
+            idle_motion_modifier_id_ = stackchan.addModifier(std::make_unique<IdleMotionModifier>(2000, 4000));
+            return;
+        case 2:
+        default:
+            idle_motion_modifier_id_ = stackchan.addModifier(std::make_unique<IdleMotionModifier>());
+            return;
     }
 }
 
@@ -570,9 +602,14 @@ void StackChanAvatarDisplay::SetTheme(Theme* theme)
 
 #include <hal/board/hal_bridge.h>
 static bool _is_xiaozhi_ready = false;
+static bool _is_xiaozhi_idle  = false;
 bool hal_bridge::is_xiaozhi_ready()
 {
     return _is_xiaozhi_ready;
+}
+bool hal_bridge::is_xiaozhi_idle()
+{
+    return _is_xiaozhi_idle;
 }
 
 void StackChanAvatarDisplay::SetStatus(const char* status)
@@ -709,7 +746,7 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
         }
 
         if (speaking_modifier_id_ < 0) {
-            speaking_modifier_id_ = stackchan.addModifier(std::make_unique<SpeakingModifier>());
+            speaking_modifier_id_ = stackchan.addModifier(std::make_unique<SpeakingModifier>(0, 180, false));
         }
 
         esp_timer_stop(bubble_clear_timer_);
@@ -730,16 +767,14 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
     }
 
     if (is_idle) {
-        // idle_expression is the FACE-expression overlay (separate from
-        // gaze) — still IDLE-gated because we don't want random expression
-        // changes mid-listening or mid-speaking.
-        if (idle_expression_modifier_id_ < 0) {
-            idle_expression_modifier_id_ = stackchan.addModifier(
-                std::make_unique<IdleExpressionModifier>());
+        // Start idle motion
+        ESP_LOGW(TAG, "Start idle motion");
+        if (idle_motion_modifier_id_ < 0) {
+            if (idle_motion_level_ > 0) {
+                CreateIdleMotionModifier();
+            }
+            idle_expression_modifier_id_ = stackchan.addModifier(std::make_unique<IdleExpressionModifier>());
         }
-        // Right-ring listening pixel is owned by set_listening_pixel()
-        // above and the toggle pips at 8/9 are owned by StateManager —
-        // nothing to clear from here.
 
         // Phase 1.2: register the ambient sound localizer once. Its
         // callback fires from the audio input task whenever stereo
@@ -755,7 +790,8 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
                 [](const std::vector<int16_t>& lr) {
                     stackchan::SoundLocalizer::Instance().OnStereoFrame(lr);
                 });
-        }
+
+        _is_xiaozhi_idle = true;
     } else {
         // Phase 3: face_tracking + idle_motion are NOT removed here —
         // both stay alive for the whole session and are tuned per chat
@@ -768,6 +804,8 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
         // The left ring is the state arc (owned by StateManager) and the
         // right-ring listening pixel + toggle pips are owned by their
         // respective controllers — nothing to clear from here.
+
+        _is_xiaozhi_idle = false;
     }
 
     // Clear sleep state

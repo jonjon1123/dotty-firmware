@@ -6,6 +6,7 @@
 #include "motion.h"
 #include "esp_log.h"
 #include <cmath>
+#include "motion_math.h"
 
 using namespace uitk;
 using namespace stackchan::motion;

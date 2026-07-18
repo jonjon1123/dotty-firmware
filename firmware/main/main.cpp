@@ -43,6 +43,7 @@ extern "C" void app_main(void)
             }
         }
 
+        // Uninstall all apps and destroy mooncake
         GetMooncake().uninstallAllApps();
         DestroyMooncake();
     }
