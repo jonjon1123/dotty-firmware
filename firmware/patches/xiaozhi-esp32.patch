@@ -1,5 +1,5 @@
 diff --git a/main/application.cc b/main/application.cc
-index d54ac6b..8abadb2 100644
+index d54ac6b..c152196 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -9,6 +9,9 @@
@@ -34,7 +34,7 @@ index d54ac6b..8abadb2 100644
 +                GetDeviceState() == kDeviceStateIdle &&
 +                protocol_ != nullptr &&
 +                protocol_->IsTimeout()) {
-+                ESP_LOGW(TAG, "Idle channel timeout — proactive close+reopen");
++                ESP_LOGW(TAG, "Idle channel timeout Γò¼├┤Γö£├ºΓö£Γòó proactive close+reopen");
 +                protocol_->CloseAudioChannel();
 +                if (!protocol_->OpenAudioChannel()) {
 +                    ESP_LOGW(TAG, "Idle channel reopen failed; will retry next cycle");
@@ -190,7 +190,7 @@ index d54ac6b..8abadb2 100644
      ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
  
 +    // Emit a perception bus event with the dominant sound direction over
-+    // the last ~1.5 s — that window covers the wake-word phrase itself
++    // the last ~1.5 s Γò¼├┤Γö£├ºΓö£Γòó that window covers the wake-word phrase itself
 +    // (~700 ms) plus the user's lead-in. Server-side consumer
 +    // (_perception_wake_word_turner in bridge.py) decides whether to
 +    // turn the head; firmware emits unconditionally regardless of state.
@@ -242,7 +242,7 @@ index d54ac6b..8abadb2 100644
              display->SetChatMessage("system", "");
              break;
          case kDeviceStateListening:
-+            // Dotty privacy gate: defense-in-depth — SetPrivacyGate forces
++            // Dotty privacy gate: defense-in-depth Γò¼├┤Γö£├ºΓö£Γòó SetPrivacyGate forces
 +            // Idle, but a race could land us here. Skip the entire LISTENING
 +            // entry (SetStatus would paint the listening pixel red and
 +            // SetEmotion would overwrite Sleepy) so the StateManager's
@@ -281,14 +281,14 @@ index d54ac6b..8abadb2 100644
      });
  }
  
-+// Dotty: ambient perception event emit. Thread-safe — Schedule pushes
++// Dotty: ambient perception event emit. Thread-safe Γò¼├┤Γö£├ºΓö£Γòó Schedule pushes
 +// the actual SendEvent onto the main task so callers (face_tracking
 +// modifier on Core 0, sound localizer task) don't need to know about
 +// the protocol's threading model.
 +//
 +// Lazy-opens the WS audio channel so events from idle state (no
 +// active conversation) still reach the server. xiaozhi WS lifecycle
-+// is otherwise session-scoped — without this, perception events
++// is otherwise session-scoped Γò¼├┤Γö£├ºΓö£Γòó without this, perception events
 +// queued at idle would silently fail (websocket_ == nullptr).
 +void Application::SendEvent(const std::string& name, const std::string& data_json) {
 +    Schedule([this, name, data_json]() {
@@ -311,7 +311,7 @@ index d54ac6b..8abadb2 100644
 +    //     transitions through Idle / Listening (see the gate checks in
 +    //     the kDeviceStateIdle and kDeviceStateListening cases)
 +    //   - device state forced to Idle so any in-flight LISTENING/SPEAKING
-+    //     is unwound through the normal state-change plumbing — display
++    //     is unwound through the normal state-change plumbing Γò¼├┤Γö£├ºΓö£Γòó display
 +    //     status flips to STANDBY, which clears the listening LED via
 +    //     stackchan_display::set_listening_pixel.
 +    // When off: gate clears, and the next Idle transition re-arms wake-word
@@ -328,7 +328,7 @@ index d54ac6b..8abadb2 100644
 +            // identity check.
 +            SetDeviceState(kDeviceStateIdle);
 +        } else {
-+            // Re-arm only if we're idle — other states have their own
++            // Re-arm only if we're idle Γò¼├┤Γö£├ºΓö£Γòó other states have their own
 +            // entry-side audio setup, which the gate will no longer
 +            // intercept.
 +            if (state_machine_.GetState() == kDeviceStateIdle) {
@@ -555,16 +555,23 @@ index 2c1b7a1..018a861 100644
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
 diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
-index 24cc272..bbae066 100644
+index 24cc272..20c6115 100644
 --- a/main/audio/audio_service.cc
 +++ b/main/audio/audio_service.cc
-@@ -155,12 +155,13 @@ void AudioService::Start() {
+@@ -1,5 +1,6 @@
+ #include "audio_service.h"
+ #include <esp_log.h>
++#include <esp_task_wdt.h>
+ #include <cstring>
+ 
+ #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)        \
+@@ -155,12 +156,17 @@ void AudioService::Start() {
      }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
  #endif
  
 -    /* Start the opus codec task */
 -    xTaskCreate([](void* arg) {
-+    /* Start the opus codec task — priority above audio_output (4), pinned to Core 1
++    /* Start the opus codec task Γò¼├┤Γö£├ºΓö£Γòó priority above audio_output (4), pinned to Core 1
 +       to avoid WiFi contention on Core 0 */
 +    xTaskCreatePinnedToCore([](void* arg) {
          AudioService* audio_service = (AudioService*)arg;
@@ -572,10 +579,14 @@ index 24cc272..bbae066 100644
          vTaskDelete(NULL);
 -    }, "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_);
 +    }, "opus_codec", 2048 * 12, this, 6, &opus_codec_task_handle_, 1);
++    // Dotty: subscribe opus_codec to the task watchdog. The CELT encoder can
++    // spin in op_pvq_search_c/bitexact_log2tan on garbage PCM; without this
++    // subscription the spin starves IDLE1 and we lose the whole device.
++    esp_task_wdt_add(opus_codec_task_handle_);
  }
  
  void AudioService::Stop() {
-@@ -267,6 +268,12 @@ void AudioService::AudioInputTask() {
+@@ -267,6 +273,12 @@ void AudioService::AudioInputTask() {
              int samples = 160; // 10ms
              std::vector<int16_t> data;
              if (ReadAudioData(data, 16000, samples)) {
@@ -588,6 +599,60 @@ index 24cc272..bbae066 100644
                  audio_engine_->Feed(std::move(data));
                  continue;
              }
+@@ -319,7 +331,14 @@ void AudioService::AudioOutputTask() {
+ void AudioService::OpusCodecTask() {
+     while (true) {
+         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+-        audio_queue_cv_.wait(lock, [this]() {
++        // Dotty: bound the wait so the task can reset the task watchdog even
++        // when the queues are empty. Without this timeout, an idle opus_codec
++        // parked in cv.wait() never feeds TWDT, and a freshly-subscribed task
++        // (esp_task_wdt_add below) trips the watchdog as soon as the WDT
++        // window elapses. 5 s is well under the 10 s sdkconfig default and
++        // gives a generous margin if processing briefly blocks the wait
++        // return path.
++        audio_queue_cv_.wait_for(lock, std::chrono::seconds(5), [this]() {
+             return service_stopped_ ||
+                 (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) ||
+                 (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE);
+@@ -327,6 +346,10 @@ void AudioService::OpusCodecTask() {
+         if (service_stopped_) {
+             break;
+         }
++        // Dotty: feed the task watchdog each loop iteration. esp_opus_enc_process
++        // never yields, so if CELT's PVQ search spins we want TWDT to fire
++        // instead of starving IDLE1 indefinitely.
++        esp_task_wdt_reset();
+ 
+         /* Decode the audio from decode queue */
+         if (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
+@@ -395,6 +418,26 @@ void AudioService::OpusCodecTask() {
+             packet->sample_rate = 16000;
+             packet->timestamp = task->timestamp;
+ 
++            // Dotty: drop frames with garbage PCM. AFE underflow during the
++            // speaking->listening transition can hand the encoder samples
++            // that cause celt_encode_with_ec Γò¼├┤Γö£├æΓö£├Ñ op_pvq_search_c Γò¼├┤Γö£├æΓö£├Ñ
++            // bitexact_log2tan to spin and wedge the device. Better to lose
++            // one frame than to hang.
++            bool pcm_garbage = false;
++            if (task->pcm.size() == encoder_frame_size_) {
++                for (int16_t s : task->pcm) {
++                    if (s == INT16_MIN || s > 30000 || s < -30000) {
++                        pcm_garbage = true;
++                        break;
++                    }
++                }
++            }
++            if (pcm_garbage) {
++                ESP_LOGW(TAG, "Dropping PCM frame: out-of-range samples (likely AFE underflow)");
++                lock.lock();
++                continue;
++            }
++
+             if (opus_encoder_ != nullptr && task->pcm.size() == encoder_frame_size_) {
+                 std::vector<uint8_t> buf(encoder_outbuf_size_);
+                 esp_audio_enc_in_frame_t in = {
 diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
 index c3afa13..1948c3d 100644
 --- a/main/audio/audio_service.h
@@ -625,6 +690,36 @@ index c3afa13..1948c3d 100644
      std::unique_ptr<AudioEngine> audio_engine_;
      std::unique_ptr<AudioDebugger> audio_debugger_;
      void* opus_encoder_ = nullptr;
+diff --git a/main/audio/engines/afe_audio_engine.cc b/main/audio/engines/afe_audio_engine.cc
+index d32b657..cb0fb8e 100644
+--- a/main/audio/engines/afe_audio_engine.cc
++++ b/main/audio/engines/afe_audio_engine.cc
+@@ -126,15 +126,14 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
+         ? nullptr
+         : esp_srmodel_filter(models_, ESP_VADN_PREFIX, nullptr);
+     afe_config_t* afe_config = afe_config_init(
+-        input_format.c_str(), models_, AFE_TYPE_FD, AFE_MODE_LOW_COST);
++        input_format.c_str(), models_, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+     if (afe_config == nullptr) {
+         ESP_LOGE(TAG, "Failed to create AFE configuration");
+         return false;
+     }
+ 
+     afe_config->aec_init = codec_->input_reference();
+-    afe_config->aec_mode = AEC_MODE_FD_LOW_COST;
+-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
++    afe_config->aec_mode = AEC_MODE_SR_LOW_COST;
+     afe_config->ns_init = false;
+     afe_config->vad_init = kUseAfeForVoiceProcessing;
+     afe_config->vad_mode = VAD_MODE_0;
+@@ -148,6 +147,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms, srmode
+         : nullptr;
+     afe_config->agc_init = false;
+     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
++    afe_config->afe_ringbuf_size = 30;
+ 
+     afe_iface_ = esp_afe_handle_from_config(afe_config);
+     if (afe_iface_ != nullptr) {
 diff --git a/main/boards/common/i2c_device.cc b/main/boards/common/i2c_device.cc
 index 835997d..1061416 100644
 --- a/main/boards/common/i2c_device.cc

@@ -216,7 +216,8 @@ public:
         int y   = -1;
     };
 
-    Ft6336(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr)
+    Ft6336(i2c_master_bus_handle_t i2c_bus, uint8_t addr)
+        : I2cDevice(i2c_bus, addr), i2c_bus_(i2c_bus), device_address_(addr)
     {
         uint8_t chip_id = ReadReg(0xA3);
         ESP_LOGI(TAG, "Get chip ID: 0x%02X", chip_id);
@@ -228,9 +229,40 @@ public:
         delete[] read_buffer_;
     }
 
+    // Returns true on a successful read OR while the device is in a known-bad
+    // backoff window. Returns false only when the caller should skip the touch
+    // update entirely (we just probed the bus and the device is still gone).
     bool UpdateTouchPoint()
     {
-        ReadRegs(0x02, read_buffer_, 6);
+        if (backoff_until_ms_ != 0) {
+            const int64_t now_ms = esp_timer_get_time() / 1000;
+            if (now_ms < backoff_until_ms_) {
+                return true;
+            }
+            // Backoff elapsed — probe the bus to see if the device is back
+            // before paying for another 100 ms I2C read timeout.
+            if (i2c_master_probe(i2c_bus_, device_address_, 50) != ESP_OK) {
+                backoff_until_ms_ = now_ms + kBackoffMs;
+                return false;
+            }
+            backoff_until_ms_ = 0;
+        }
+
+        const uint8_t reg = 0x02;
+        const esp_err_t err =
+            i2c_master_transmit_receive(i2c_device_, &reg, 1, read_buffer_, 6, 100);
+        if (err != ESP_OK) {
+            consecutive_failures_++;
+            if (consecutive_failures_ == 1 || consecutive_failures_ == 10 || consecutive_failures_ == 50) {
+                ESP_LOGW(TAG, "FT6336 read failed (%lu consecutive): %s",
+                         (unsigned long)consecutive_failures_, esp_err_to_name(err));
+            }
+            if (consecutive_failures_ >= kFailureBackoffThreshold) {
+                backoff_until_ms_ = (esp_timer_get_time() / 1000) + kBackoffMs;
+                ESP_LOGW(TAG, "FT6336 backing off for %u ms", (unsigned)kBackoffMs);
+            }
+            return false;
+        }
 
         consecutive_failures_ = 0;
         tp_.num               = read_buffer_[0] & 0x0F;
@@ -245,10 +277,15 @@ public:
     }
 
 private:
-    uint8_t* read_buffer_          = nullptr;
+    static constexpr uint32_t kFailureBackoffThreshold = 3;
+    static constexpr uint32_t kBackoffMs               = 1000;
+
+    i2c_master_bus_handle_t i2c_bus_;
+    uint8_t device_address_;
+    uint8_t* read_buffer_      = nullptr;
     TouchPoint_t tp_;
-    int64_t last_error_log_us_     = 0;
     uint32_t consecutive_failures_ = 0;
+    int64_t backoff_until_ms_      = 0;
 };
 
 class M5StackCoreS3Board : public WifiBoard {
@@ -437,7 +474,10 @@ private:
         ESP_LOGI(TAG, "Init FT6336");
         ft6336_ = new Ft6336(i2c_bus_, 0x38);
 
-        // 创建定时器，20ms 间隔
+        // 100 ms interval — the FT6336 is for head-pet detection, 10 Hz is plenty.
+        // Polling at 20 ms saturated the shared I2C bus (the audio codec,
+        // PMIC, and IO expander all sit on i2c_port_1) and produced ~100 ms
+        // ReadRegs timeouts whenever the codec was active.
         esp_timer_create_args_t timer_args = {
             .callback =
                 [](void* arg) {
@@ -452,7 +492,7 @@ private:
         };
 
         ESP_ERROR_CHECK(esp_timer_create(&timer_args, &touchpad_timer_));
-        ESP_ERROR_CHECK(esp_timer_start_periodic(touchpad_timer_, 20 * 1000));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(touchpad_timer_, 100 * 1000));
     }
 
     void InitializeSpi()
