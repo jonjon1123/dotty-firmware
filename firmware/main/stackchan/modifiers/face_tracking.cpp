@@ -6,10 +6,8 @@
 #include "face_tracking.h"
 #include "../stackchan.h"
 #include "idle_motion.h"
-#include "../modes/state_manager.h"  // Phase 4: IDLE <-> TALK transitions
-#include "application.h"  // Phase 1.2: server-bound perception events
-#include <hal/board/hal_bridge.h>
-#include <hal/board/stackchan_camera.h>
+#include "../modes/state_manager.h"  // Phase 4: TALK -> IDLE on face_lost
+#include "application.h"  // server-bound perception events
 
 #include "esp_log.h"
 
@@ -60,31 +58,6 @@ static constexpr float kEmaAlpha     = 0.7f;   // history: 0.3f → 0.5f → 0.7
 static constexpr int   kLookAtSpeed  = 500;    // unchanged in Phase 1
 static constexpr float kDeadbandFrac = 0.02f;  // history: 0.06f → 0.02f (Phase 1)
 
-// Post-capture-release throttle. Bench trace 2026-04-29 caught the
-// "take a photo, immediately turn away" symptom as a single
-// face_tracking lookAt at speed=500 issued in the same millisecond
-// the capture-pending guard released — with a prior idle_motion move
-// still in flight (isMoving=1). The fast spring under the prior
-// trajectory's velocity reads as a violent snap. We use a softer
-// spring (kPostReleaseLookAtSpeed) for the first kPostReleaseThrottle
-// commands actually issued after release; the deadband + last_cmd
-// re-seed at release time can also suppress the first command
-// entirely if the user hasn't moved much during the lock window.
-//
-// Counter decrements per *issued* command, not per tick — otherwise
-// a deadband-skipped tick would burn the throttle budget without
-// taking a turn. Soft enough that subsequent normal-speed tracking
-// resumes within a fraction of a second.
-static constexpr int kPostReleaseLookAtSpeed = 200;
-static constexpr uint8_t kPostReleaseThrottle = 2;
-
-// Capture-pending guard ceiling. Bridge's typical first take_photo round-trip
-// is 200-800 ms; 5 s gives ~6× headroom and unblocks idle motion before the
-// user notices the freeze if take_photo never arrives (bridge container down,
-// network blip, etc). Lower this if the per-walk-in head freeze feels too
-// long when the bridge is unreachable.
-static constexpr uint32_t kCaptureGuardTimeoutMs = 5000;
-
 FaceTrackingModifier::FaceTrackingModifier()
 {
     // Phase 3 — initial profile is IDLE (matches the state at construction;
@@ -122,64 +95,6 @@ void FaceTrackingModifier::_update(Modifiable& stackchan)
 
     if (!result.read(detected, raw_x, raw_y, size, ts)) return;
 
-    // ---- Capture-pending guard release check ---------------------------
-    // Runs every tick before any state-machine work. Releases the outer
-    // motion lock when one of: (a) Capture() ran (its inner MotionPauseGuard
-    // tick advances lastCaptureTimestampMs), (b) timeout elapsed.
-    // face_lost release is handled inside the GracePeriod expiry branch.
-    //
-    // On release, if a face is currently detected, we re-seed _smooth_x/y
-    // from the live raw position. Otherwise the EMA values that drifted
-    // during the lock window (head frozen, but face_detection_result kept
-    // updating) become the next servo target — which produces a fast snap
-    // toward the EMA-blended position the moment commands resume. The
-    // re-seed makes the post-freeze command target the actual current
-    // face position with no drift accumulated, eliminating the visible
-    // "spin after photo" catch-up.
-    if (_capture_guard_held) {
-        uint32_t held_ms = now - _capture_guard_acquired_ms;
-        auto* cam = hal_bridge::board_get_camera();
-        uint32_t cur_capture_ts = cam ? cam->lastCaptureTimestampMs() : 0;
-        if (cur_capture_ts != 0 && cur_capture_ts != _capture_guard_baseline_capture_ts) {
-            stackchan.motion().setModifyLock(false);
-            _capture_guard_held = false;
-            if (detected) {
-                _smooth_x = raw_x;
-                _smooth_y = raw_y;
-                // Re-seed last_cmd from the live face position so the
-                // deadband can suppress the first post-release command
-                // when the user hasn't moved much during the lock window.
-                // _last_cmd_valid was reset on Idle→Tracking; without
-                // this seed the first command always fires no matter
-                // how small the delta. See kPostReleaseLookAtSpeed
-                // comment for the wider context.
-                _last_cmd_x = raw_x;
-                _last_cmd_y = raw_y;
-                _last_cmd_valid = true;
-            }
-            _post_release_throttle = kPostReleaseThrottle;
-            ESP_LOGI(TAG, "capture-pending guard released (capture observed dt=%u ms)",
-                     (unsigned)held_ms);
-        } else if (held_ms > kCaptureGuardTimeoutMs) {
-            stackchan.motion().setModifyLock(false);
-            _capture_guard_held = false;
-            if (detected) {
-                _smooth_x = raw_x;
-                _smooth_y = raw_y;
-                // Same rationale as the observed-capture branch — after
-                // a 5 s timeout the head has been frozen even longer,
-                // so a softer first command matters more, not less.
-                _last_cmd_x = raw_x;
-                _last_cmd_y = raw_y;
-                _last_cmd_valid = true;
-            }
-            _post_release_throttle = kPostReleaseThrottle;
-            ESP_LOGW(TAG, "capture-pending guard timeout-release (%u ms — take_photo never arrived)",
-                     (unsigned)held_ms);
-        }
-    }
-    // ---------------------------------------------------------------------
-
     // ---- Phase 0 instrumentation: counters update -----------------------
     // Lazy-init window start on first call so the first window is full-length.
     if (_phase0_window_start_ms == 0) _phase0_window_start_ms = now;
@@ -212,64 +127,6 @@ void FaceTrackingModifier::_update(Modifiable& stackchan)
                 // we (re-)acquire a face after an idle gap.
                 _last_cmd_valid = false;
                 setIdleTrackingMode(true);
-                // Acquire capture-pending guard BEFORE emitting face_detected
-                // so the head is already locked by the time the bridge sees
-                // the event and dispatches its take_photo MCP call. The guard
-                // holds the motion lock until the next tick observes either
-                // (a) Capture() ran (lastCaptureTimestampMs advances), (b)
-                // face_lost fires (GracePeriod expiry branch below), or (c)
-                // kCaptureGuardTimeoutMs elapses. Without this, IdleMotion
-                // overlay drifts and FaceTracking lookAt commands move the
-                // head between SendEvent and Capture, producing the
-                // "no one in view" failure mode.
-                if (!_capture_guard_held) {
-                    auto* cam = hal_bridge::board_get_camera();
-                    _capture_guard_baseline_capture_ts = cam ? cam->lastCaptureTimestampMs() : 0;
-                    stackchan.motion().setModifyLock(true);
-                    _capture_guard_held = true;
-                    _capture_guard_acquired_ms = now;
-                    ESP_LOGI(TAG, "capture-pending guard acquired (face_detected baseline_ts=%u)",
-                             (unsigned)_capture_guard_baseline_capture_ts);
-                } else {
-                    // Defensive — refresh the timeout window if a previous
-                    // guard somehow leaked through (shouldn't happen given
-                    // the state machine de-dupes face_detected).
-                    _capture_guard_acquired_ms = now;
-                }
-                Application::GetInstance().SendEvent("face_detected", "{}");
-                // Phase 4 — transition IDLE -> TALK locally so the state pip
-                // updates immediately, without waiting on the bridge round-trip.
-                // StateManager itself decides whether to act (sticky states like
-                // STORY_TIME / SECURITY / SLEEP / DANCE are intentionally
-                // unaffected by camera edges).
-                if (auto* sm = static_cast<StateManager*>(
-                        ::GetStackChan().getModifierByName(StateManager::kName))) {
-                    sm->onFaceDetected();
-                }
-                // Open the mic on face acquisition — same path as a
-                // wake-word detection. The device transitions to
-                // Listening (auto-stop / VAD-driven), so a short
-                // window of silence returns to idle naturally; if the
-                // user speaks within the window, the normal chat
-                // flow takes over. The bridge's inject-text greeting
-                // then interrupts with "Hi!" and listening resumes
-                // post-TTS. Tag with "face" so server logs can tell
-                // this trigger from a real wake-word detection.
-                //
-                // Gate WakeWordInvoke on the authoritative device state.
-                // The earlier _profile.allow_wake_word_invoke gate was IDLE-only
-                // by design but lagged: stackchan_display.cc::SetStatus pushes
-                // LISTENING/SPEAKING into the profile, and on a flickering
-                // walk-in the modifier can cycle Idle->Tracking->GracePeriod->Idle
-                // (800 ms grace) faster than the first invoke's state propagates
-                // back. Result observed 2026-04-29: two AfeWakeWord encodes per
-                // walk-in, two TTS chunks ~280 ms apart, garbled playback.
-                // GetDeviceState() reflects the device state machine directly,
-                // so the second acquisition while the first session is still
-                // SPEAKING/LISTENING is suppressed at the call site.
-                if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-                    Application::GetInstance().WakeWordInvoke("face");
-                }
             }
             break;
 
@@ -296,15 +153,6 @@ void FaceTrackingModifier::_update(Modifiable& stackchan)
                 _state = State::Idle;
                 _last_cmd_valid = false;
                 setIdleTrackingMode(false);
-                // Release capture-pending guard if take_photo never arrived
-                // before the user walked away. Capturing a frame of empty
-                // wall is the exact failure mode this guard is trying to
-                // prevent.
-                if (_capture_guard_held) {
-                    stackchan.motion().setModifyLock(false);
-                    _capture_guard_held = false;
-                    ESP_LOGI(TAG, "capture-pending guard released (face_lost)");
-                }
                 Application::GetInstance().SendEvent("face_lost", "{}");
                 // Phase 4 — transition TALK -> IDLE on grace expiry. STORY_TIME /
                 // SECURITY / SLEEP / DANCE all stay sticky here; they have their
@@ -372,10 +220,6 @@ void FaceTrackingModifier::_maybeIssueLookAt(Modifiable& stackchan)
         }
     }
     int speed = kLookAtSpeed;
-    if (_post_release_throttle > 0) {
-        speed = kPostReleaseLookAtSpeed;
-        _post_release_throttle--;
-    }
     stackchan.motion().lookAtNormalized(_smooth_x, _smooth_y, speed, "face_tracking");
     _last_cmd_x = _smooth_x;
     _last_cmd_y = _smooth_y;
@@ -383,17 +227,6 @@ void FaceTrackingModifier::_maybeIssueLookAt(Modifiable& stackchan)
     _phase0_cmd++;  // Phase 0 instrumentation — count actually-issued commands.
 }
 
-FaceTrackingModifier::~FaceTrackingModifier()
-{
-    // Drop a held capture-pending guard on teardown so the motion lock
-    // doesn't leak across modifier swaps (e.g. sleep entry, which removes
-    // both face_tracking and idle_motion). Without this the lock would
-    // stay incremented forever and idle_motion would never resume.
-    if (_capture_guard_held) {
-        ::GetStackChan().motion().setModifyLock(false);
-        _capture_guard_held = false;
-        ESP_LOGI(TAG, "capture-pending guard released (modifier teardown)");
-    }
-}
+FaceTrackingModifier::~FaceTrackingModifier() = default;
 
 }  // namespace stackchan

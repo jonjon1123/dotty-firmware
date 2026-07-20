@@ -12,25 +12,23 @@
 namespace stackchan {
 
 // Phase 3 — chat-state profile pushed by stackchan_display.cc::SetStatus
-// on each chat-state transition. Drives EMA smoothing, idle-overlay
-// cadence/amplitude, and whether face acquisition fires WakeWordInvoke.
+// on each chat-state transition. Drives EMA smoothing and idle-overlay
+// cadence/amplitude.
 struct ChatProfile {
     float    alpha;                  // EMA smoothing factor for face center
     uint32_t overlay_min_ms;         // tracking-overlay cadence (idle_motion)
     uint32_t overlay_max_ms;
     float    amplitude_scale;        // scale on overlay deltas (1.0 = Phase 2 default)
-    bool     allow_wake_word_invoke; // only true for the IDLE profile
 };
 
 // Per-chat-state profile table. `inline constexpr` so the definitions are
 // visible across translation units (stackchan_display.cc picks the right
 // one to push, face_tracking.cpp uses kChatProfileIdle as the constructor
 // default). amplitude_scale is relative to Phase 2's halved tracking-
-// overlay range (±75°/±40°). allow_wake_word_invoke is IDLE-only so a
-// face re-acquired mid-chat doesn't stomp on the running session.
-inline constexpr ChatProfile kChatProfileIdle      { 0.7f, 12000, 24000, 1.0f, true  };
-inline constexpr ChatProfile kChatProfileListening { 0.8f,  8000, 12000, 1.0f, false };
-inline constexpr ChatProfile kChatProfileSpeaking  { 0.4f, 30000, 45000, 0.5f, false };
+// overlay range (±75°/±40°).
+inline constexpr ChatProfile kChatProfileIdle      { 0.7f, 12000, 24000, 1.0f };
+inline constexpr ChatProfile kChatProfileListening { 0.8f,  8000, 12000, 1.0f };
+inline constexpr ChatProfile kChatProfileSpeaking  { 0.4f, 30000, 45000, 0.5f };
 
 class FaceTrackingModifier : public Modifier {
 public:
@@ -42,11 +40,11 @@ public:
     const char* name() const override { return kName; }
 
     // Phase 3 — push a new chat profile. Updates _alpha + _profile, hands
-    // the overlay tunables through to IdleMotionModifier, and stores the
-    // wake-word gate. Safe to call from the main task on chat-state
-    // transitions; reads on Core 1 (the modifier loop) are non-atomic but
-    // tearing here is benign (worst case: one tick uses a partially-
-    // updated profile, self-corrects on the next tick).
+    // the overlay tunables through to IdleMotionModifier. Safe to call from
+    // the main task on chat-state transitions; reads on Core 1 (the
+    // modifier loop) are non-atomic but tearing here is benign (worst case:
+    // one tick uses a partially-updated profile, self-corrects on the next
+    // tick).
     void setChatProfile(const ChatProfile& profile);
 
 private:
@@ -83,9 +81,7 @@ private:
     uint32_t _last_face_time = 0;
     uint32_t _grace_start    = 0;
     // Shortened from 2000 ms so face_lost fires quickly after the
-    // user leaves frame — the bridge's perception bus listens for
-    // that event and aborts any in-flight TTS so Dotty doesn't talk
-    // to empty space. 800 ms still gives ~2-3 frames at ~3 fps face
+    // user leaves frame. 800 ms still gives ~2-3 frames at ~3 fps face
     // detection to re-acquire during small head movements before
     // flipping back to idle.
     uint32_t _grace_period_ms = 800;
@@ -95,27 +91,6 @@ private:
     // _alpha is also a member because the EMA expression in _update reads
     // it inline; setChatProfile keeps both _alpha and _profile.alpha in sync.
     ChatProfile _profile;
-
-    // Capture-pending guard — held across the face_detected → take_photo
-    // round-trip so the head doesn't drift between detection and the
-    // server-driven still capture. Acquired on Idle→Tracking emit, released
-    // on (a) the next observed Capture (lastCaptureTimestampMs ticks),
-    // (b) face_lost, (c) kCaptureGuardTimeoutMs after acquire (defensive
-    // ceiling when take_photo never arrives — bridge container down, etc.),
-    // or (d) modifier teardown via destructor. Refresh-only on overlapping
-    // face_detected (no double-acquire — Motion::setModifyLock is refcounted
-    // but our outer guard still wants single-ownership semantics so we
-    // don't lose the inner Capture's release).
-    bool     _capture_guard_held              = false;
-    uint32_t _capture_guard_acquired_ms       = 0;
-    uint32_t _capture_guard_baseline_capture_ts = 0;
-
-    // Decremented per actually-issued lookAt command (not per tick) so
-    // deadband-skipped ticks don't burn the throttle budget. While > 0
-    // _maybeIssueLookAt uses kPostReleaseLookAtSpeed instead of
-    // kLookAtSpeed. See face_tracking.cpp constants block for the
-    // bench history that motivated this.
-    uint8_t _post_release_throttle = 0;
 
     // Phase 0 instrumentation — counters reset every kPhase0WindowMs.
     // See probes/face-tracking-naturalness.md for the bench procedure.

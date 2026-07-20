@@ -1,5 +1,5 @@
 diff --git a/main/application.cc b/main/application.cc
-index d54ac6b..c152196 100644
+index d54ac6b..3afe8c4 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -9,6 +9,9 @@
@@ -208,7 +208,15 @@ index d54ac6b..c152196 100644
      if (state == kDeviceStateIdle) {
          audio_service_.EncodeWakeWord();
          auto wake_word = audio_service_.GetLastWakeWord();
-@@ -866,21 +930,43 @@ void Application::HandleStateChangedEvent() {
+@@ -800,6 +864,7 @@ void Application::HandleWakeWordDetectedEvent() {
+             return;
+         }
+         // Channel already opened, continue directly
++        SetDeviceState(kDeviceStateConnecting);
+         ContinueWakeWordInvoke(wake_word);
+     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+         AbortSpeaking(kAbortReasonWakeWordDetected);
+@@ -866,21 +931,43 @@ void Application::HandleStateChangedEvent() {
      auto led = board.GetLed();
      led->OnStateChanged();
      
@@ -253,7 +261,7 @@ index d54ac6b..c152196 100644
              display->SetStatus(Lang::Strings::LISTENING);
              display->SetEmotion("neutral");
  
-@@ -891,8 +977,8 @@ void Application::HandleStateChangedEvent() {
+@@ -891,8 +978,8 @@ void Application::HandleStateChangedEvent() {
                  if (listening_mode_ == kListeningModeAutoStop) {
                      audio_service_.WaitForPlaybackQueueEmpty();
                  }
@@ -264,7 +272,7 @@ index d54ac6b..c152196 100644
                  protocol_->SendStartListening(listening_mode_);
                  audio_service_.EnableVoiceProcessing(true);
              }
-@@ -912,6 +998,12 @@ void Application::HandleStateChangedEvent() {
+@@ -912,6 +999,12 @@ void Application::HandleStateChangedEvent() {
              }
              break;
          case kDeviceStateSpeaking:
@@ -277,7 +285,15 @@ index d54ac6b..c152196 100644
              display->SetStatus(Lang::Strings::SPEAKING);
  
              if (listening_mode_ != kListeningModeRealtime) {
-@@ -1087,6 +1179,63 @@ void Application::SendMcpMessage(const std::string& payload) {
+@@ -1040,6 +1133,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
+             return;
+         }
+         // Channel already opened, continue directly
++        SetDeviceState(kDeviceStateConnecting);
+         ContinueWakeWordInvoke(wake_word);
+     } else if (state == kDeviceStateSpeaking) {
+         Schedule([this]() {
+@@ -1087,6 +1181,63 @@ void Application::SendMcpMessage(const std::string& payload) {
      });
  }
  
@@ -555,17 +571,19 @@ index 2c1b7a1..018a861 100644
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
 diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
-index 24cc272..20c6115 100644
+index 24cc272..117c16c 100644
 --- a/main/audio/audio_service.cc
 +++ b/main/audio/audio_service.cc
-@@ -1,5 +1,6 @@
+@@ -1,6 +1,8 @@
  #include "audio_service.h"
  #include <esp_log.h>
 +#include <esp_task_wdt.h>
  #include <cstring>
++#include <cmath>
  
  #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)        \
-@@ -155,12 +156,17 @@ void AudioService::Start() {
+     (esp_ae_rate_cvt_cfg_t)                                  \
+@@ -155,12 +157,17 @@ void AudioService::Start() {
      }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
  #endif
  
@@ -586,7 +604,7 @@ index 24cc272..20c6115 100644
  }
  
  void AudioService::Stop() {
-@@ -267,6 +273,12 @@ void AudioService::AudioInputTask() {
+@@ -267,6 +274,12 @@ void AudioService::AudioInputTask() {
              int samples = 160; // 10ms
              std::vector<int16_t> data;
              if (ReadAudioData(data, 16000, samples)) {
@@ -599,7 +617,7 @@ index 24cc272..20c6115 100644
                  audio_engine_->Feed(std::move(data));
                  continue;
              }
-@@ -319,7 +331,14 @@ void AudioService::AudioOutputTask() {
+@@ -319,7 +332,14 @@ void AudioService::AudioOutputTask() {
  void AudioService::OpusCodecTask() {
      while (true) {
          std::unique_lock<std::mutex> lock(audio_queue_mutex_);
@@ -615,7 +633,7 @@ index 24cc272..20c6115 100644
              return service_stopped_ ||
                  (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) ||
                  (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE);
-@@ -327,6 +346,10 @@ void AudioService::OpusCodecTask() {
+@@ -327,6 +347,10 @@ void AudioService::OpusCodecTask() {
          if (service_stopped_) {
              break;
          }
@@ -626,33 +644,97 @@ index 24cc272..20c6115 100644
  
          /* Decode the audio from decode queue */
          if (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
-@@ -395,6 +418,26 @@ void AudioService::OpusCodecTask() {
+@@ -395,11 +419,88 @@ void AudioService::OpusCodecTask() {
              packet->sample_rate = 16000;
              packet->timestamp = task->timestamp;
  
-+            // Dotty: drop frames with garbage PCM. AFE underflow during the
-+            // speaking->listening transition can hand the encoder samples
-+            // that cause celt_encode_with_ec Γò¼├┤Γö£├æΓö£├Ñ op_pvq_search_c Γò¼├┤Γö£├æΓö£├Ñ
-+            // bitexact_log2tan to spin and wedge the device. Better to lose
-+            // one frame than to hang.
+-            if (opus_encoder_ != nullptr && task->pcm.size() == encoder_frame_size_) {
++            // Dotty: robust PCM validation. The CELT encoder can hang on
++            // specific patterns (silence, clipping, periodic artifacts) that
++            // pass simple range checks. We validate multiple properties:
++            // 1. Overflow sentinels (INT16_MIN)
++            // 2. Extreme values (|s| > 30000)
++            // 3. Silence (RMS < 100) - can cause numerical issues in pitch analysis
++            // 4. Clipping (>10% of samples near saturation) - can cause energy quantization to spin
++            // Frame size is NOT checked: AFE_TYPE_SR's fetch pacing produces
++            // partial 30ms frames that the Opus encoder handles fine; the
++            // strict ==encoder_frame_size_ test would drop those silently.
 +            bool pcm_garbage = false;
-+            if (task->pcm.size() == encoder_frame_size_) {
++            const char* garbage_reason = nullptr;
++            if (!task->pcm.empty()) {
++                int64_t sum_sq = 0;
++                int clipping_count = 0;
++                const int clipping_threshold = (int)(task->pcm.size() * 0.1); // 10% of samples
++
 +                for (int16_t s : task->pcm) {
-+                    if (s == INT16_MIN || s > 30000 || s < -30000) {
++                    if (s == INT16_MIN) {
 +                        pcm_garbage = true;
++                        garbage_reason = "overflow sentinel";
 +                        break;
++                    }
++                    if (s > 30000 || s < -30000) {
++                        pcm_garbage = true;
++                        garbage_reason = "extreme value";
++                        break;
++                    }
++                    sum_sq += (int64_t)s * s;
++                    if (s > 28000 || s < -28000) {
++                        clipping_count++;
++                    }
++                }
++
++                if (!pcm_garbage) {
++                    // Check for silence (RMS < 100)
++                    int64_t mean_sq = sum_sq / task->pcm.size();
++                    int rms = (int)sqrt((double)mean_sq);
++                    if (rms < 100) {
++                        pcm_garbage = true;
++                        garbage_reason = "silence";
++                    }
++                    // Check for excessive clipping
++                    else if (clipping_count > clipping_threshold) {
++                        pcm_garbage = true;
++                        garbage_reason = "excessive clipping";
 +                    }
 +                }
 +            }
++
 +            if (pcm_garbage) {
-+                ESP_LOGW(TAG, "Dropping PCM frame: out-of-range samples (likely AFE underflow)");
++                ESP_LOGW(TAG, "Dropping PCM frame: %s (likely AFE underflow or bad state)", garbage_reason);
 +                lock.lock();
 +                continue;
 +            }
 +
-             if (opus_encoder_ != nullptr && task->pcm.size() == encoder_frame_size_) {
++            // Dotty: reset the encoder periodically to prevent state corruption.
++            // The CELT encoder accumulates pitch/energy history that can cause
++            // hangs on specific patterns. Resetting every 1000 frames (20s at
++            // 20ms/frame) clears this state without significantly impacting quality.
++            static int encode_frame_count = 0;
++            if (++encode_frame_count >= 1000) {
++                encode_frame_count = 0;
++                ESP_LOGI(TAG, "Resetting Opus encoder state (periodic maintenance)");
++                esp_opus_enc_close(opus_encoder_);
++                esp_opus_enc_config_t opus_enc_cfg = AS_OPUS_ENC_CONFIG();
++                esp_opus_enc_open(&opus_enc_cfg, sizeof(esp_opus_enc_config_t), &opus_encoder_);
++                if (opus_encoder_ != nullptr) {
++                    esp_opus_enc_get_frame_size(opus_encoder_, &encoder_frame_size_, &encoder_outbuf_size_);
++                }
++            }
++
++            // Dotty: feed the task watchdog before each encode call. The encoder
++            // can spin on pathological input, so we want to ensure the watchdog
++            // is fed before we enter the encode loop.
++            esp_task_wdt_reset();
++
++            if (opus_encoder_ != nullptr && !task->pcm.empty()) {
                  std::vector<uint8_t> buf(encoder_outbuf_size_);
                  esp_audio_enc_in_frame_t in = {
+                     .buffer = (uint8_t *)(task->pcm.data()),
+-                    .len = (uint32_t)(encoder_frame_size_ * sizeof(int16_t)),
++                    .len = (uint32_t)(task->pcm.size() * sizeof(int16_t)),
+                 };
+                 esp_audio_enc_out_frame_t out = {
+                     .buffer = buf.data(),
 diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
 index c3afa13..1948c3d 100644
 --- a/main/audio/audio_service.h
